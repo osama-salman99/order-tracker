@@ -1,0 +1,109 @@
+spring:
+  application:
+    name: orders-app
+  datasource:
+    # TRACE_LEVEL_FILE=0: H2 otherwise writes unbounded stack traces to <db>.trace.db. Relative to
+    # the systemd WorkingDirectory (/opt/orders-app), so the history survives a redeploy — the
+    # deployer only swaps the jar.
+    # retry: is H2's own file access mode that reopens the file instead of giving up when a thread
+    # writing to it is interrupted. Java closes a file channel outright when the thread using it is
+    # interrupted, which during a write leaves the store half-finished; this makes that survivable.
+    # WRITE_DELAY=0 is what stops the store being left unreadable after a re-read of the whole
+    # archive. H2 normally lets changes sit in memory for half a second before writing them, and
+    # under the rate a replay commits at, what finally reaches the file is not always a store that
+    # can be opened again — "File corrupted while reading record" on the next start, four times in
+    # September 2026. Measured against a copy of the live database: with the delay left alone a
+    # completed replay broke the file seven times out of seven on the version in use and about half
+    # the time on the newest one; with it set to zero, eight replays out of eight came back clean.
+    # The cost is a write to disk per commit, which for a handful of emails a day is nothing.
+    url: jdbc:h2:retry:./data/orders-db;TRACE_LEVEL_FILE=0;DB_CLOSE_ON_EXIT=FALSE;WRITE_DELAY=0
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  task:
+    scheduling:
+      shutdown:
+        # Never cut the archive re-reader off mid-write. Without this Spring interrupts the thread
+        # that reads the mail, and an interrupt while it is writing closes the database's file
+        # underneath it. The reader is asked to stop earlier in the shutdown and finishes the email
+        # in hand in milliseconds, so in practice there is nothing left to wait for by this point.
+        await-termination: true
+        await-termination-period: 45s
+  h2:
+    console:
+      enabled: false
+  servlet:
+    multipart:
+      # Not used for uploads; this only bounds a stray multipart POST.
+      max-file-size: 30MB
+      max-request-size: 30MB
+
+server:
+  port: 8250
+  # Behind Caddy on 127.0.0.1, same as every other service in the fleet.
+  address: 127.0.0.1
+  # Caddy terminates TLS and forwards X-Forwarded-*; honour them so the login redirect uses the
+  # external https scheme and host instead of http://127.0.0.1.
+  forward-headers-strategy: framework
+  # A forwarded email carrying a long HTML body arrives as one POST; the 8 KB default header cap is
+  # about headers, but a generous body limit is set on the ingest endpoint in code (25 MB).
+  tomcat:
+    max-http-form-post-size: 30MB
+    max-swallow-size: 30MB
+
+management:
+  server:
+    # Actuator on its own 127.0.0.1-only port, never proxied by Caddy. The vps-health deployer polls
+    # http://localhost:8251/actuator/health to decide rollback; on the main port the SSO chain's
+    # 302-to-login reads as healthy, which is how a broken deploy sticks.
+    port: 8251
+    address: 127.0.0.1
+  endpoints:
+    web:
+      exposure:
+        include: health
+
+# Everything is behind the shared SSO wall except the one door mail comes through. A Cloudflare
+# Email Worker cannot sign in, so /ingest-email is public and guarded by a shared secret instead —
+# and CSRF is skipped there for the same reason: the caller is a worker, not a browser with a token.
+osmosis:
+  auth:
+    # The manifest and its icons too: a phone fetches them without the login cookie when adding to the home screen.
+    public-paths: /ingest-email,/manifest.json,/icon-192.png,/icon-512.png,/icon-maskable-512.png
+    csrf-ignore-patterns: /ingest-email
+
+orders:
+  # Shared secret the Cloudflare worker sends as X-Ingest-Token. No default on purpose: with the
+  # secret missing the endpoint refuses mail outright rather than accepting it from anyone.
+  ingest-token: ${ORDERS_INGEST_TOKEN:}
+  # Verbatim copies of every message, relative to the working directory. This is the durable record
+  # the extraction rules are replayed against, so it outlives any jar.
+  archive-dir: ${ORDERS_ARCHIVE_DIR:./data/archive}
+  # Where a copy of the database is put before the rules are replayed over the whole archive, which
+  # is the one routine operation that rewrites nearly every row. The three most recent are kept.
+  backup-dir: ${ORDERS_BACKUP_DIR:./data/backups}
+  # Local copies of the shops' product photographs, so the page never asks a retailer for one — the
+  # links rot, they sit outside the login wall, and each one would tell a shop when this order is
+  # being looked at. Disposable: delete it and the pictures are fetched again.
+  image-dir: ${ORDERS_IMAGE_DIR:./data/images}
+  # Where the parcels go. PostNL's tracking page refuses a barcode on its own and asks for the
+  # delivery postcode, so it has to be part of the link; every other carrier ignores it. Left blank
+  # the links still work for the others and PostNL simply asks for the postcode as it does today.
+  delivery-postcode: ${ORDERS_DELIVERY_POSTCODE:}
+  # Addresses belonging to the person forwarding. When mail arrives *from* one of these, the real
+  # retailer is named in a forward banner inside the body rather than in the From header.
+  self-addresses: ${ORDERS_SELF_ADDRESSES:}
+  # Reading the order mail straight from Gmail, with Mail's Google sign-in. All three blank
+  # (the default) leaves it off and the app relies on forwarded mail alone.
+  gmail:
+    client-id: ${ORDERS_GMAIL_CLIENT_ID:}
+    client-secret: ${ORDERS_GMAIL_CLIENT_SECRET:}
+    refresh-token: ${ORDERS_GMAIL_REFRESH_TOKEN:}
+    # Which mail counts as order mail: the label Mail files it under.
+    query: ${ORDERS_GMAIL_QUERY:label:Orders}
+
+logging:
+  level:
+    work.osmosis.ordersapp: INFO

@@ -1,0 +1,7 @@
+build/
+.gradle/
+*.class
+data/
+upload-tmp/
+.idea/
+*.iml

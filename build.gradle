@@ -1,0 +1,77 @@
+import org.apache.tools.ant.filters.ReplaceTokens
+
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '4.1.1'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'work.osmosis'
+version = '1.0.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // The fleet's single-sign-on wall: default-DENY, so every page is behind auth.osmosis.work
+    // unless it is named in osmosis.auth.public-paths.
+    implementation project(':auth-core')
+    // The shared /version endpoint, which reads the osmosis-version resource written below.
+    implementation project(':version-core')
+
+    implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+
+    // Order history is small and single-writer, so an embedded file database is the right size of
+    // tool — same choice the crawlers made, and it keeps the service to one process with no
+    // external dependency to start before it.
+    runtimeOnly 'com.h2database:h2'
+
+    // Jakarta Mail parses the raw RFC-822 the Cloudflare worker posts. It handles the
+    // quoted-printable and base64 bodies that retailer mail arrives in; hand-rolling that decoding
+    // is where an ingest silently loses the tracking number.
+    implementation 'org.eclipse.angus:angus-mail:2.0.5'
+
+    // Retailer mail is overwhelmingly HTML. jsoup turns it into readable text while keeping the
+    // structure the rules need — a table cell boundary is the difference between "Total 84,20" and
+    // a number glued to the label beside it.
+    implementation 'org.jsoup:jsoup:1.23.2'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+    testImplementation 'org.springframework.boot:spring-boot-resttestclient'
+    testImplementation 'org.springframework.boot:spring-boot-restclient'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+// Bake the build version into every page's badge and into the /version resource (from
+// -PosmosisVersion=v<run> in CI; 'dev' for local builds), same convention as the rest of the
+// fleet — a badge that disagrees with /version means a stale browser cache.
+//
+// Every HTML page is filtered, not a named list of them: a page added later would otherwise
+// ship the literal token in its footer, which is exactly what happened to the order detail page.
+processResources {
+    def osmosisVersion = (project.findProperty('osmosisVersion') ?: 'dev').toString()
+    inputs.property('osmosisVersion', osmosisVersion)
+    filesMatching(['**/*.html', 'osmosis-version']) {
+        filter(ReplaceTokens, tokens: [OSMOSIS_VERSION: osmosisVersion])
+    }
+}
+
+
+// A one-off helper for running the extraction rules over a corpus of real mail outside the
+// application. Prints the runtime classpath so a plain `java` invocation can use it.
+tasks.register('printCp') {
+    doLast { println sourceSets.main.runtimeClasspath.asPath }
+}

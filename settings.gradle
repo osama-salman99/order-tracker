@@ -1,0 +1,6 @@
+rootProject.name = 'order-tracker'
+
+// auth-core carries the shared login check and version-core the /version endpoint every app in the
+// fleet serves. Both are vendored as plain folders so this repo builds on its own.
+include ':auth-core'
+include ':version-core'

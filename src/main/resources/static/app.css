@@ -1,0 +1,1143 @@
+/*
+ * Parcel labels on a sorting-hall floor.
+ *
+ * Every order is a white slip with black ink on it, the way a shipping label is: the one surface on
+ * a parcel that is made to be read at a glance. The page around them is the cool grey of the floor
+ * they are sorted on, so the slips stand off it without needing shadows or borders to do so.
+ *
+ * Colour is only ever a state. Blue is moving, green arrived, red something is wrong, grey finished
+ * without arriving. The single exception is the yellow tape across the list that marks today — the
+ * one decorative thing on the page, and even that is doing a job: it is where the page rests.
+ *
+ * The type is Archivo throughout, one family used at two widths. Its condensed heavy cut carries
+ * the dates and the headings the way a label printer's numerals do; its normal width is the text.
+ */
+
+@font-face {
+    font-family: "Archivo";
+    src: url("/fonts/archivo.woff2") format("woff2-variations"), url("/fonts/archivo.woff2") format("woff2");
+    font-weight: 100 900;
+    font-stretch: 62% 125%;
+    font-style: normal;
+    font-display: swap;
+}
+
+:root {
+    color-scheme: light;
+
+    --floor: #e6e9ed;
+    --slip: #ffffff;
+    --slip-quiet: #f5f6f8;
+    --ink: #15181c;
+    /* On --slip this is 7:1 and on --floor 5.9:1, so secondary text is still comfortably readable. */
+    --ink-2: #4f5761;
+    --rule: #dde1e6;
+    --rule-strong: #c3c9d0;
+
+    --moving: #1d5bd6;
+    --done: #17784a;
+    --trouble: #c23128;
+    --stopped: #69717b;
+
+    --tape: #f6c945;
+    --tape-ink: #2b2200;
+
+    --focus: #1d5bd6;
+    --bar-h: 64px;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        color-scheme: dark;
+
+        --floor: #1a1d21;
+        --slip: #262a30;
+        --slip-quiet: #22262b;
+        --ink: #eef0f3;
+        --ink-2: #a9b0b9;
+        --rule: #353a41;
+        --rule-strong: #4a5058;
+
+        --moving: #86aefc;
+        --done: #6fcf98;
+        --trouble: #ff8a7d;
+        --stopped: #a1a8b1;
+
+        --tape: #e8b93a;
+        --tape-ink: #1d1600;
+
+        --focus: #86aefc;
+    }
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html {
+    scrollbar-gutter: stable;
+    -webkit-text-size-adjust: 100%;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--floor);
+    color: var(--ink);
+    font-family: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.45;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+}
+
+a {
+    color: inherit;
+}
+
+:focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+button {
+    font: inherit;
+    color: inherit;
+}
+
+.wrap {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 0 16px 72px;
+}
+
+[hidden] {
+    display: none !important;
+}
+
+/* The build badge, exactly as the rest of the fleet draws it: bottom-left, green while this tab runs
+   the build the server does, red once it does not. Its colours are the fleet's, not this page's. */
+#osmosis-ver {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    z-index: 2147483000;
+    padding: 2px 5px;
+    border-top-right-radius: 4px;
+    background: #161b22;
+    border-top: 1px solid rgba(255, 255, 255, 0.14);
+    border-right: 1px solid rgba(255, 255, 255, 0.14);
+    font: 600 10px/1.2 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: 0.02em;
+    color: #3fb950;
+    opacity: 0.85;
+    pointer-events: auto;
+    user-select: all;
+}
+
+#osmosis-ver.stale {
+    color: #f87171;
+}
+
+/* Opened from the home screen, the page runs into the phone's rounded corners and under the
+   home bar, which would clip the text of a tab pinned to the corner. There the tab stays in
+   the corner but grows into it, so the screen's curve rounds it off and the text sits clear. */
+/* In a browser tab the tag follows the phone: white on a light page, dark on a dark one. */
+#osmosis-ver{background:#fff;border-top-color:rgba(0,0,0,.12);border-right-color:rgba(0,0,0,.12);box-shadow:0 -1px 3px rgba(0,0,0,.06);color:#1a7f37}#osmosis-ver.stale{color:#d1242f}@media (prefers-color-scheme:dark){#osmosis-ver{background:#161B22;border-top-color:rgba(255,255,255,.14);border-right-color:rgba(255,255,255,.14);box-shadow:none;color:#3fb950}#osmosis-ver.stale{color:#f87171}}
+@media (display-mode:standalone),(hover:hover) and (pointer:fine){#osmosis-ver{--vb:rgba(255,255,255,.9);--vl:rgba(0,0,0,.12);left:24px;bottom:24px;margin:0;padding:0;background:none;border:0;border-radius:0;box-shadow:none;opacity:1;font-size:11px;line-height:1;color:#1a7f37;transform:translate(-50%,50%) rotate(45deg)}#osmosis-ver.stale{color:#cf222e}#osmosis-ver::before{content:"";position:absolute;z-index:-1;left:50%;top:50%;width:150px;height:150px;margin:-129px 0 0 -75px;border-radius:50%;background:radial-gradient(circle,transparent 45.5px,var(--vl) 46.5px,var(--vb) 47.5px);-webkit-mask:conic-gradient(transparent 128deg,#000 150deg 210deg,transparent 232deg);mask:conic-gradient(transparent 128deg,#000 150deg 210deg,transparent 232deg)}@media (prefers-color-scheme:dark){#osmosis-ver{--vb:rgba(22,27,34,.92);--vl:rgba(255,255,255,.16);color:#3fb950}#osmosis-ver.stale{color:#f87171}}}@media (hover:hover) and (pointer:fine){#osmosis-ver{left:14px;bottom:14px}}
+
+/* ---------------------------------------------------------------------------
+ * The bar.
+ *
+ * The only thing at the top of the list, and it stays there: the name of the page, the search, the
+ * Today button, and the two ways out of the list. The list opens at today, with the finished orders
+ * above, so these are the controls the reader must never have to scroll back for.
+ * ------------------------------------------------------------------------- */
+
+.bar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    margin: 0 -16px 8px;
+    padding: 12px 16px;
+    background: var(--floor);
+    border-bottom: 1px solid var(--rule-strong);
+}
+
+.barline {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 728px;
+    margin: 0 auto;
+}
+
+.brand {
+    margin: 0 auto 0 0;
+    font-size: 28px;
+    line-height: 1;
+    font-weight: 850;
+    font-stretch: 70%;
+    letter-spacing: -0.01em;
+}
+
+.controls {
+    margin-top: 10px;
+}
+
+.search {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.search input {
+    width: 100%;
+    height: 44px;
+    padding: 0 14px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 10px;
+    background: var(--slip);
+    color: var(--ink);
+    /* 16px or iOS zooms the whole page the moment the field is touched. */
+    font: inherit;
+    font-size: 16px;
+}
+
+.search input::placeholder {
+    color: var(--ink-2);
+}
+
+.search input:focus-visible {
+    outline-offset: 0;
+    border-color: var(--focus);
+}
+
+.search.is-counting input {
+    padding-right: 72px;
+}
+
+.filtercount {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--ink-2);
+    font-size: 14px;
+    pointer-events: none;
+}
+
+/* Plain, legible buttons: a label on a flat surface, big enough for a thumb. */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 44px;
+    padding: 0 14px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 10px;
+    background: var(--slip);
+    color: var(--ink);
+    font-size: 15px;
+    font-weight: 600;
+    white-space: nowrap;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.btn.is-on {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--slip);
+}
+
+.btn .count {
+    font-weight: 500;
+    color: var(--ink-2);
+}
+
+.btn.is-on .count {
+    color: inherit;
+    opacity: 0.75;
+}
+
+.btn.quiet {
+    border-color: transparent;
+    background: transparent;
+}
+
+/* ---------------------------------------------------------------------------
+ * The timeline.
+ *
+ * One column of days, earliest at the top and the latest expected arrival at the bottom, which is
+ * where the page opens. Each day is its date on the left, set big in the condensed cut so the eye
+ * can run down the dates alone, and that day's slips beside it.
+ * ------------------------------------------------------------------------- */
+
+.timeline {
+    padding-top: 8px;
+}
+
+.day {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 0 14px;
+    padding: 10px 0;
+}
+
+.daymark {
+    position: sticky;
+    top: calc(var(--bar-h) + 10px);
+    align-self: start;
+    display: grid;
+    justify-items: start;
+    line-height: 1;
+    padding-top: 6px;
+}
+
+.daymark .dnum {
+    font-size: 40px;
+    font-weight: 850;
+    font-stretch: 62%;
+    letter-spacing: -0.02em;
+}
+
+.daymark .dmon {
+    margin-top: 4px;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+.daymark .dwk {
+    margin-top: 3px;
+    font-size: 14px;
+    color: var(--ink-2);
+}
+
+/* "Tomorrow" and "Yesterday" are wider than the phone's 44px rail; the day number's condensed cut fits them. */
+.daymark .dwk.is-near {
+    color: var(--ink);
+    font-weight: 700;
+    font-stretch: 62%;
+}
+
+.daymark.is-undated {
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.2;
+    padding-top: 12px;
+}
+
+.day.is-past .daymark .dnum {
+    color: var(--ink-2);
+}
+
+.slips {
+    display: grid;
+    gap: 8px;
+}
+
+/* One order. A white slip with the order on the left and its state and action on the right. */
+.entry {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: stretch;
+    background: var(--slip);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.entrylink {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+    padding: 14px 4px 14px 16px;
+    text-decoration: none;
+    border-radius: 12px;
+}
+
+.entrylink:focus-visible {
+    outline-offset: -3px;
+}
+
+/* Every row is the same height whatever it knows: the words sit in a block tall enough for all
+   three lines (shop, item, figures), centred, and each line is cut short rather than wrapped. */
+.entrywords {
+    min-width: 0;
+    flex: 1 1 auto;
+    min-height: 72px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.entry .shop,
+.entry .what,
+.entry .meta {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.entry .shop {
+    display: block;
+    font-size: 18px;
+    font-weight: 750;
+    line-height: 1.2;
+}
+
+.entry .what {
+    margin: 3px 0 0;
+    color: var(--ink);
+    font-size: 15px;
+    line-height: 1.35;
+}
+
+.entry .meta {
+    display: flex;
+    gap: 14px;
+    margin-top: 6px;
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.entry .meta .amount {
+    color: var(--ink);
+    font-weight: 650;
+}
+
+.entryside {
+    display: grid;
+    grid-template-columns: 9.5rem 8.5rem;
+    align-items: center;
+    justify-items: start;
+    gap: 10px;
+    padding: 12px 14px 12px 4px;
+}
+
+.entryside .mark {
+    justify-self: end;
+}
+
+/* A state is a word in its colour with a small square of the same colour in front of it. An order
+   that is only placed, and not yet moving, gets the outline of the square: nothing has happened. */
+.status {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 14px;
+    font-weight: 650;
+    color: var(--ink-2);
+}
+
+.status::before {
+    content: "";
+    width: 9px;
+    height: 9px;
+    border-radius: 2px;
+    border: 2px solid currentColor;
+    flex: none;
+}
+
+.status.is-moving,
+.status.is-done,
+.status.is-missing,
+.status.is-late,
+.status.is-stopped {
+    color: var(--ink);
+}
+
+.status.is-moving::before { background: var(--moving); border-color: var(--moving); }
+.status.is-done::before { background: var(--done); border-color: var(--done); }
+.status.is-stopped::before { background: var(--stopped); border-color: var(--stopped); }
+.status.is-missing::before,
+.status.is-late::before { background: var(--trouble); border-color: var(--trouble); }
+
+.status.is-moving { color: var(--moving); }
+.status.is-done { color: var(--done); }
+.status.is-missing,
+.status.is-late { color: var(--trouble); }
+
+/* Something is wrong with this one: the slip says so down its left edge. */
+.entry.is-late,
+.entry.is-missing {
+    box-shadow: inset 4px 0 0 var(--trouble);
+}
+
+/* Finished orders are always there, at their own date, but faded so the open ones still lead. */
+.entry.is-settled {
+    background: var(--slip-quiet);
+    opacity: 0.5;
+}
+
+.entry.is-settled .shop {
+    font-weight: 650;
+}
+
+/* The square every row starts with: the shop's first letter, or the item's picture once it is in. */
+.thumb {
+    flex: none;
+    width: 56px;
+    height: 56px;
+    border-radius: 8px;
+    background: var(--floor);
+    border: 1px solid transparent;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+}
+
+.thumb .initial {
+    font-size: 26px;
+    font-weight: 850;
+    font-stretch: 70%;
+    line-height: 1;
+    color: var(--ink-2);
+}
+
+.thumb img {
+    display: none;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+.thumb.has-picture {
+    background: #fff;
+    border-color: var(--rule);
+}
+
+.thumb.has-picture .initial {
+    display: none;
+}
+
+.thumb.has-picture img {
+    display: block;
+    animation: picture-in 0.2s ease;
+}
+
+@keyframes picture-in {
+    from { opacity: 0; }
+}
+
+/* The one thing that can be done from the list. */
+.mark {
+    height: 38px;
+    padding: 0 12px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 9px;
+    background: var(--slip);
+    color: var(--ink);
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.mark.is-undo {
+    border-color: transparent;
+    background: transparent;
+    color: var(--ink-2);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.mark:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.mark.is-bad {
+    border-color: var(--trouble);
+    color: var(--trouble);
+}
+
+/* Today, as a strip of packing tape laid across the list. Everything under it is still to come. */
+.nowmark {
+    position: relative;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin: 14px -8px;
+    padding: 9px 16px 10px;
+    background: var(--tape);
+    color: var(--tape-ink);
+    /* Torn ends, as tape has: a few shallow notches cut from each side. */
+    clip-path: polygon(0 8%, 1.2% 0, 98.6% 0, 100% 14%, 99.2% 50%, 100% 86%, 98.8% 100%,
+                       1% 100%, 0 90%, 0.8% 50%);
+    transform: rotate(-0.6deg);
+}
+
+.nowmark strong {
+    font-size: 22px;
+    line-height: 1;
+    font-weight: 850;
+    font-stretch: 70%;
+}
+
+.nowmark span {
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.nowmark .ahead {
+    margin-left: auto;
+    font-weight: 500;
+}
+
+.empty {
+    padding: 48px 8px;
+    color: var(--ink-2);
+    text-align: center;
+}
+
+.allclear p {
+    margin: 0 0 6px;
+}
+
+.allclear .allclear-line {
+    color: var(--ink);
+    font-size: 28px;
+    font-weight: 850;
+    font-stretch: 70%;
+}
+
+/* ---------------------------------------------------------------------------
+ * One order in full.
+ * ------------------------------------------------------------------------- */
+
+.back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+    margin-top: 12px;
+    color: var(--ink-2);
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.back::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-left: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(45deg);
+    margin: 0 4px 0 2px;
+}
+
+.pagehead {
+    margin: 6px 0 18px;
+}
+
+.pagehead h1 {
+    margin: 0;
+    font-size: 44px;
+    line-height: 1;
+    font-weight: 850;
+    font-stretch: 66%;
+    letter-spacing: -0.01em;
+    overflow-wrap: anywhere;
+}
+
+.pagehead .status {
+    margin-top: 10px;
+    font-size: 16px;
+}
+
+.pagehead .sub {
+    margin: 6px 0 0;
+    color: var(--ink-2);
+}
+
+.sheet {
+    background: var(--slip);
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 28px;
+}
+
+.sheet .item {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+}
+
+.sheet h2.title {
+    margin: 0;
+    font-size: 20px;
+    line-height: 1.3;
+    font-weight: 650;
+    overflow-wrap: anywhere;
+}
+
+.shot {
+    flex: none;
+    width: 96px;
+    height: 96px;
+    border-radius: 10px;
+    background: #fff;
+    border: 1px solid var(--rule);
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.shot.is-ready {
+    opacity: 1;
+}
+
+.shot img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+
+.facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px 20px;
+    margin: 18px 0 0;
+    padding: 16px 0 0;
+    border-top: 1px solid var(--rule);
+}
+
+.fact .k {
+    display: block;
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+.fact .v {
+    display: block;
+    font-size: 17px;
+    font-weight: 650;
+    overflow-wrap: anywhere;
+}
+
+.sheet p {
+    margin: 14px 0 0;
+    max-width: 62ch;
+    color: var(--ink);
+}
+
+.mark-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--rule);
+}
+
+.mark-row + .mark-row {
+    border-top: 0;
+    padding-top: 0;
+    margin-top: 10px;
+}
+
+/* The rarer answers sit side by side: each control's own row dissolves into this one. */
+.mark-row.is-rare > .mark-row {
+    display: contents;
+}
+
+.mark-row .mark-note:empty {
+    display: none;
+}
+
+.mark-row .mark {
+    height: 44px;
+    padding: 0 16px;
+    font-size: 15px;
+}
+
+.mark-row .mark.is-undo {
+    border-color: var(--rule-strong);
+    background: var(--slip);
+    color: var(--ink);
+    text-decoration: none;
+}
+
+.mark-note {
+    color: var(--ink-2);
+    font-size: 15px;
+}
+
+.orderlink {
+    color: var(--moving);
+    font-weight: 650;
+    text-underline-offset: 3px;
+}
+
+.section {
+    margin-bottom: 28px;
+}
+
+.section > h2 {
+    margin: 0 0 10px;
+    font-size: 24px;
+    line-height: 1.1;
+    font-weight: 850;
+    font-stretch: 70%;
+}
+
+.parcel {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+    padding: 14px 16px;
+    background: var(--slip);
+    border-radius: 12px;
+    margin-bottom: 8px;
+}
+
+.parcel .carrier {
+    font-weight: 750;
+}
+
+.parcel .num {
+    font-size: 15px;
+    color: var(--ink-2);
+    letter-spacing: 0.02em;
+    overflow-wrap: anywhere;
+}
+
+.parcel a {
+    margin-left: auto;
+    color: var(--moving);
+    font-weight: 650;
+    text-underline-offset: 3px;
+}
+
+/* The emails, as the sequence they are: a line down the left with a stop for each message. */
+.mails {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.mail {
+    position: relative;
+    padding: 0 0 18px 26px;
+}
+
+.mail::before {
+    content: "";
+    position: absolute;
+    left: 4px;
+    top: 7px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--floor);
+    border: 2px solid var(--ink-2);
+}
+
+.mail::after {
+    content: "";
+    position: absolute;
+    left: 9px;
+    top: 21px;
+    bottom: 2px;
+    width: 2px;
+    background: var(--rule-strong);
+}
+
+/* The dot of an email that moved the order on takes the colour of where it moved it to. */
+.mail.is-placed::before { background: var(--ink-2); }
+.mail.is-moving::before { background: var(--moving); border-color: var(--moving); }
+.mail.is-done::before { background: var(--done); border-color: var(--done); }
+.mail.is-stopped::before { background: var(--stopped); border-color: var(--stopped); }
+.mail.is-missing::before { background: var(--trouble); border-color: var(--trouble); }
+
+.mail:last-child::after {
+    display: none;
+}
+
+.mail .subj {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.mail .when {
+    color: var(--ink-2);
+    font-size: 14px;
+}
+
+/* What the email changed: the new state, a delivery date, a parcel number — or nothing. */
+.mail .changes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    margin-top: 5px;
+    font-size: 14px;
+}
+
+.mail .change {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.mail .change.is-none {
+    color: var(--ink-2);
+    font-weight: 400;
+}
+
+.skel {
+    border-radius: 6px;
+    background: var(--rule);
+}
+
+.mail.is-waiting .skel-subj {
+    height: 18px;
+    width: 60%;
+    margin-bottom: 6px;
+}
+
+.mail.is-waiting .skel-when {
+    height: 14px;
+    width: 34%;
+}
+
+/* ---------------------------------------------------------------------------
+ * Choosing the order that replaced this one.
+ * ------------------------------------------------------------------------- */
+
+.picker {
+    flex: 1 1 100%;
+    min-width: 0;
+    display: grid;
+    gap: 8px;
+}
+
+.picker > .mark-note {
+    margin: 4px 0 0;
+    color: var(--ink);
+    font-weight: 600;
+}
+
+.pick {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 10px;
+    min-width: 0;
+}
+
+.pick.is-suggested {
+    border-color: var(--moving);
+    box-shadow: inset 4px 0 0 var(--moving);
+}
+
+.pickwords {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.pickline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 14px;
+}
+
+.picknum {
+    font-weight: 750;
+    overflow-wrap: anywhere;
+}
+
+.pick .amount {
+    font-weight: 650;
+}
+
+.pick .mark-note {
+    font-size: 14px;
+}
+
+.pick .meta {
+    margin-top: 2px;
+    color: var(--ink-2);
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pickwhy {
+    margin-top: 4px;
+    color: var(--moving);
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.pick .mark {
+    flex: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * Hover, only where there is a pointer that can hover.
+ * ------------------------------------------------------------------------- */
+
+@media (hover: hover) and (pointer: fine) {
+    .entrylink:hover .shop {
+        text-decoration: underline;
+        text-underline-offset: 3px;
+        text-decoration-thickness: 2px;
+    }
+
+    .btn:hover,
+    .mark:hover:not(:disabled) {
+        border-color: var(--ink);
+    }
+
+    .btn.is-on:hover {
+        opacity: 0.88;
+    }
+
+    .mark.is-undo:hover:not(:disabled) {
+        color: var(--ink);
+        border-color: transparent;
+    }
+
+    .back:hover {
+        color: var(--ink);
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Narrow screens.
+ * ------------------------------------------------------------------------- */
+
+@media (max-width: 560px) {
+    .brand {
+        font-size: 26px;
+    }
+
+    .day {
+        grid-template-columns: 44px minmax(0, 1fr);
+        gap: 0 10px;
+    }
+
+    .daymark .dnum {
+        font-size: 34px;
+    }
+
+    .daymark .dmon,
+    .daymark .dwk {
+        font-size: 13px;
+    }
+
+    .daymark.is-undated {
+        font-size: 13px;
+    }
+
+    /* The state and the button move under the order, where they can have the whole width. */
+    .entry {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .entrylink {
+        padding: 12px 14px 4px;
+    }
+
+    .entryside {
+        grid-template-columns: minmax(0, 1fr) auto;
+        padding: 4px 14px 12px;
+    }
+
+    .entry .shop {
+        font-size: 17px;
+    }
+
+    .thumb {
+        width: 48px;
+        height: 48px;
+    }
+
+    .thumb .initial {
+        font-size: 22px;
+    }
+
+    .nowmark {
+        flex-wrap: wrap;
+        gap: 2px 10px;
+        margin: 14px -6px;
+    }
+
+    .nowmark .ahead {
+        display: none;
+    }
+
+    .pagehead h1 {
+        font-size: 38px;
+    }
+
+    .sheet {
+        padding: 16px;
+    }
+
+    .shot {
+        width: 72px;
+        height: 72px;
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * Motion. Only in answer to something the reader did, plus the tape going down once.
+ * ------------------------------------------------------------------------- */
+
+@keyframes slide-from-right {
+    from { opacity: 0; transform: translateX(18px); }
+    to { opacity: 1; transform: none; }
+}
+
+@keyframes slide-from-left {
+    from { opacity: 0; transform: translateX(-18px); }
+    to { opacity: 1; transform: none; }
+}
+
+.slide-from-right { animation: slide-from-right 0.22s cubic-bezier(0.2, 0.7, 0.2, 1); }
+.slide-from-left { animation: slide-from-left 0.22s cubic-bezier(0.2, 0.7, 0.2, 1); }
+
+@keyframes settled-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+}
+
+.entry.arriving {
+    animation: settled-in 0.26s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+}
+
+.entry.leaving {
+    opacity: 0;
+    transition: opacity 0.14s ease;
+}
+
+/* Pressed down from one end, the way tape is laid: once, when the list first appears. */
+@keyframes tape-down {
+    from { clip-path: polygon(0 8%, 1.2% 0, 1.2% 0, 1.2% 14%, 1.2% 50%, 1.2% 86%, 1.2% 100%,
+                              1% 100%, 0 90%, 0.8% 50%); }
+}
+
+.nowmark.is-laying {
+    animation: tape-down 0.5s cubic-bezier(0.3, 0.8, 0.3, 1) 0.1s backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation: none !important;
+        transition: none !important;
+    }
+}

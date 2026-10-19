@@ -1,0 +1,1113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orders</title>
+<meta name="theme-color" content="#e6e9ed" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1a1d21" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="preload" href="/fonts/archivo.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div class="wrap">
+
+  <!-- Both views live in this one document. Opening an order swaps which of them is shown; nothing
+       is ever fetched again that the page already has, so there is no white flash in between. -->
+  <div id="listview">
+
+    <!-- Sticky, and that is the whole point of it: the timeline rests at the bottom, so anything
+         parked at the top of the document is somewhere the reader never is. The page's name, the
+         controls that change what the list shows — nothing else. -->
+    <header class="bar" id="topbar">
+      <div class="barline">
+        <h1 class="brand">Orders</h1>
+        <button id="todaybtn" class="btn quiet" type="button">Today</button>
+      </div>
+      <div id="bar" class="barline controls" hidden>
+        <div class="search">
+          <input id="filter" type="search" placeholder="Search orders" autocomplete="off"
+                 spellcheck="false" aria-label="Search the orders">
+          <span id="filtercount" class="filtercount"></span>
+        </div>
+      </div>
+    </header>
+
+    <div id="timeline" class="empty">Reading the post…</div>
+
+  </div>
+
+  <div id="detailview" hidden>
+    <a class="back" id="backlink" href="/">All orders</a>
+    <header class="pagehead">
+      <h1 id="shop">Order</h1>
+      <div id="stage" class="status"></div>
+    </header>
+    <div id="detailbody"></div>
+  </div>
+
+</div>
+
+<!-- The build badge every service on osmosis.work carries, in the corner it carries it in. -->
+<div id="osmosis-ver">@OSMOSIS_VERSION@</div>
+<script src="https://osmosis.work/osmosis-badge.js"></script>
+
+<script>
+(function () {
+  'use strict';
+
+  var DAY = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  var MONTH = ['January', 'February', 'March', 'April', 'May', 'June',
+               'July', 'August', 'September', 'October', 'November', 'December'];
+  var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  // An expected date that has quietly passed is only worth pointing out while it is still recent.
+  // Older than this and the order is simply history whose delivery email never arrived, so calling
+  // it late would fill the page with alarm about parcels that turned up years ago.
+  var LATE_WINDOW_DAYS = 30;
+
+  var all = [];
+  var todayIso = isoOf(new Date());
+
+  function isoOf(d) {
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')
+           + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  function parseDay(iso) {
+    // Dates arrive as plain days with no time in them, and reading them as UTC instants would
+    // shift half the timeline by a day for anyone west of Greenwich.
+    var bits = iso.split('-');
+    return new Date(+bits[0], +bits[1] - 1, +bits[2]);
+  }
+
+  function daysFromToday(iso) {
+    var today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Math.round((parseDay(iso) - today) / 86400000);
+  }
+
+  function dayLabel(iso) {
+    var days = daysFromToday(iso);
+    if (days === 0) { return 'Today'; }
+    if (days === 1) { return 'Tomorrow'; }
+    if (days === -1) { return 'Yesterday'; }
+    var d = parseDay(iso);
+    var label = DAY[d.getDay()] + ' ' + d.getDate() + ' ' + MONTH[d.getMonth()];
+    return d.getFullYear() === new Date().getFullYear() ? label : label + ' ' + d.getFullYear();
+  }
+
+  function dayText(iso) {
+    var d = parseDay(iso);
+    return DAY[d.getDay()] + ' ' + d.getDate() + ' ' + MONTH[d.getMonth()] + ' ' + d.getFullYear();
+  }
+
+  function whenText(iso) {
+    var d = new Date(iso);
+    return d.getDate() + ' ' + MONTH[d.getMonth()] + ' ' + d.getFullYear() + ', '
+           + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+
+  function dueDay(order) {
+    return order.expectedTo || order.expectedFrom;
+  }
+
+  /**
+   * Whether an order is finished with — arrived, sent back, or called off.
+   *
+   * <p>The list only ever shows what is still outstanding, and this is what decides that. It is
+   * never true just because an order is old: one from 2021 that nobody ever confirmed is still an
+   * open question, and answering it is the reader's to do rather than the page's to assume.
+   */
+  function isDone(order) {
+    return order.finished;
+  }
+
+  /**
+   * Past its expected day and still not here. Only counted when a shop actually named the day —
+   * a date this app guessed from the last email is not a promise anyone made.
+   */
+  function isLate(order) {
+    if (order.finished || order.dateAssumed) { return false; }
+    // "Late" means it has not turned up yet on a day it was promised, which is already the whole of
+    // what a missing parcel is. Saying both gives "Late · said delivered · never arrived".
+    if (order.markedNotDelivered) { return false; }
+    var due = dueDay(order);
+    if (!due || due >= todayIso) { return false; }
+    return daysFromToday(due) >= -LATE_WINDOW_DAYS;
+  }
+
+  // Three states are all a glance needs: still coming, arrived, or it is not coming. A fourth was
+  // added for the one case that is none of them — a parcel a shop swears it delivered and the
+  // reader says never turned up, which needs chasing and so must not look settled.
+  function moodOf(order) {
+    return moodOfStage(order.stage);
+  }
+
+  function moodOfStage(stage) {
+    // Settled, but not by arriving. It belongs with returned and cancelled: the matter is closed
+    // and nothing came of this particular order.
+    if (stage === 'REPLACED' || stage === 'DISMISSED') { return 'is-stopped'; }
+    if (stage === 'NOT_HERE') { return 'is-missing'; }
+    if (stage === 'DELIVERED') { return 'is-done'; }
+    if (stage === 'RETURNED' || stage === 'CANCELLED') { return 'is-stopped'; }
+    if (stage === 'SHIPPED' || stage === 'OUT_FOR_DELIVERY' || stage === 'READY_FOR_PICKUP') { return 'is-moving'; }
+    return '';
+  }
+
+  /**
+   * The one thing the reader can say about an order that the emails cannot, and how to word it.
+   *
+   * <p>There is never more than one worth offering, so this picks it rather than showing two
+   * buttons and asking which. An order nobody has confirmed can be ticked off; one a shop claims it
+   * delivered can be contradicted, which is the case that used to have no control at all. Either
+   * mark, once set, turns the offer into taking it back.
+   *
+   * <p>Both pages read from here so that they cannot drift apart in either the wording or, worse,
+   * in which of the two things a press actually does.
+   */
+  function markChoice(order) {
+    // Set aside as not a real order: bringing it back is the only thing left to say about it.
+    if (order.dismissed) {
+      return {
+        what: 'dismissed', on: false, undo: true,
+        short: 'Undo', long: 'It is a real order',
+        hint: 'Bring this back to the list',
+        note: ''
+      };
+    }
+    // The link closes the order, so while it stands it is the only thing left to say about it.
+    // Offering "it turned up after all" underneath would be offering to reopen an order by a route
+    // that leaves the replacement still standing in for it.
+    if (order.replacedBy) {
+      return {
+        what: 'replaced-by', on: false, undo: true,
+        // "Undo" would sit in a list beside other buttons that undo something else entirely.
+        short: 'Not re-ordered', long: 'Not re-ordered after all',
+        hint: 'Unlink ' + order.replacedBy.name + ' and bring this back to the outstanding orders',
+        note: ''
+      };
+    }
+    if (order.markedNotDelivered) {
+      return {
+        what: 'not-delivered', on: false, undo: true,
+        short: 'Undo', long: 'It turned up after all',
+        hint: 'Go back to what the shop said and file this away with the completed orders',
+        note: 'You said this one never arrived.'
+      };
+    }
+    if (order.markedDelivered) {
+      return {
+        what: 'delivered', on: false, undo: true,
+        short: 'Undo', long: 'Not delivered after all',
+        hint: 'Put this back among the outstanding orders',
+        note: 'You marked this as arrived.'
+      };
+    }
+    if (order.stageFinished) {
+      return {
+        what: 'not-delivered', on: true, undo: false,
+        short: 'Never arrived', long: 'It never arrived',
+        hint: 'Say this one never turned up, and it comes back to the outstanding orders',
+        note: ''
+      };
+    }
+    return {
+      what: 'delivered', on: true, undo: false,
+      short: 'Mark delivered', long: 'Mark as delivered',
+      hint: 'Say this one arrived, and file it away with the completed ones',
+      note: 'No shop has confirmed this arrived.'
+    };
+  }
+
+  function text(tag, className, value) {
+    var el = document.createElement(tag);
+    if (className) { el.className = className; }
+    if (value !== undefined && value !== null) { el.textContent = value; }
+    return el;
+  }
+
+  /**
+   * The shop's picture of what was bought, when there is one.
+   *
+   * <p>It removes itself if it does not arrive. Some shops will not serve this service a picture at
+   * all, and the address is only ever known to have worked once the browser has drawn it — so rather
+   * than promise a picture and leave a broken-image mark where it failed, the frame is taken out and
+   * the row closes up around it. The alternative, checking first and only then drawing, would mean
+   * fetching everything twice.
+   */
+  function thumbOf(order, className) {
+    if (!order.image) { return null; }
+    var frame = text('span', className);
+    var img = document.createElement('img');
+    img.src = order.image;
+    img.alt = '';
+    // Told not to describe itself: it repeats the item name printed beside it, and a screen reader
+    // saying everything twice is worse than it saying it once.
+    img.setAttribute('aria-hidden', 'true');
+    img.addEventListener('load', function () { frame.classList.add('is-ready'); });
+    img.addEventListener('error', function () {
+      if (frame.parentNode) { frame.parentNode.removeChild(frame); }
+    });
+    frame.appendChild(img);
+    return frame;
+  }
+
+  /**
+   * The square at the start of every row in the list. Every row has one, so the words of every row
+   * start at the same place and every row is the same height: it holds the shop's first letter, and
+   * the item's picture takes its place once the picture has actually been drawn. A picture that
+   * never arrives just leaves the letter.
+   */
+  function slotOf(order) {
+    var slot = text('span', 'thumb');
+    slot.appendChild(text('span', 'initial', (order.shop || '?').trim().charAt(0).toUpperCase() || '?'));
+    slot.firstChild.setAttribute('aria-hidden', 'true');
+    if (order.image) {
+      var img = document.createElement('img');
+      img.src = order.image;
+      img.alt = '';
+      img.setAttribute('aria-hidden', 'true');
+      img.addEventListener('load', function () { slot.classList.add('has-picture'); });
+      img.addEventListener('error', function () { slot.removeChild(img); });
+      slot.appendChild(img);
+    }
+    return slot;
+  }
+
+  // ---- the timeline ---------------------------------------------------------------------------
+
+  function entryOf(order) {
+    var mood = moodOf(order);
+    var late = isLate(order);
+    // A row is a link with a button beside it, not a link containing one: a button inside an anchor
+    // is neither valid nor operable by keyboard.
+    // is-settled is not decoration: it is the handle the reveal animation reaches for, so that
+    // pressing "Completed" brings its rows in rather than making them appear all at once.
+    var row = text('div', 'entry ' + mood + (late ? ' is-late' : '') + (isDone(order) ? ' is-settled' : ''));
+
+    var a = document.createElement('a');
+    a.className = 'entrylink';
+    // A real address, even though the click is handled here: it makes the row openable in a new tab
+    // and keeps the browser's own link behaviour intact.
+    a.href = '/orders/' + order.id;
+    a.addEventListener('click', function (event) {
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      openOrder(order.id, true);
+    });
+
+    // The words of the row live in their own element rather than directly in the link, so that a
+    // picture can sit beside all of them instead of above them.
+    var words = text('div', 'entrywords');
+    words.appendChild(text('span', 'shop', order.shop || 'Unknown shop'));
+    if (order.title) { words.appendChild(text('p', 'what', order.title)); }
+
+    // Each fact its own item, spaced apart, rather than one string strung together with dots.
+    var meta = text('div', 'meta');
+    if (order.total) { meta.appendChild(text('span', 'amount', order.total)); }
+    if (order.orderNumber) { meta.appendChild(text('span', null, order.orderNumber)); }
+    if (order.parcels.length > 1) { meta.appendChild(text('span', null, order.parcels.length + ' parcels')); }
+    if (meta.childNodes.length) { words.appendChild(meta); }
+
+    a.appendChild(slotOf(order));
+    a.appendChild(words);
+    row.appendChild(a);
+
+    // Where the order stands, and the one thing that can be said back about it, side by side: the
+    // button is always an answer to the state printed above it.
+    var side = text('div', 'entryside');
+    var state = statusOf(order);
+    side.appendChild(text('span', 'status ' + state.mood, state.label));
+
+    // "Never arrived" lives only on the order's own page: on a finished row it sat beside every
+    // delivered order in the list, offering the rare case as if it were the usual one.
+    var choice = markChoice(order);
+    if (choice.what === 'not-delivered' && choice.on) {
+      row.appendChild(side);
+      return row;
+    }
+    var button = text('button', 'mark' + (choice.undo ? ' is-undo' : ''), choice.short);
+    button.type = 'button';
+    button.title = choice.hint;
+    button.setAttribute('aria-label', choice.short + ': ' + (order.shop || 'order')
+        + (order.orderNumber ? ' ' + order.orderNumber : ''));
+    button.addEventListener('click', function () { setMarked(order, choice, button); });
+    side.appendChild(button);
+    row.appendChild(side);
+    return row;
+  }
+
+  /** The state of an order as a word and a colour, with lateness folded in where it applies. */
+  function statusOf(order) {
+    if (isLate(order)) { return { mood: 'is-late', label: order.stageLabel + ', but late' }; }
+    // PostNL's two-hour slot, once it has given one: on the day, that is the thing worth knowing.
+    var slot = order.carrierWindow && !order.finished ? ', ' + order.carrierWindow : '';
+    return { mood: moodOf(order), label: order.stageLabel + slot };
+  }
+
+  /**
+   * A day's date as the rail beside its orders shows it: the day of the month big, then the month,
+   * then the weekday — or "Today" and its neighbours, which are what the reader actually thinks in.
+   */
+  function dayMark(iso) {
+    var d = parseDay(iso);
+    var mark = text('div', 'daymark');
+    mark.setAttribute('role', 'heading');
+    mark.setAttribute('aria-level', '2');
+    mark.setAttribute('aria-label', dayLabel(iso) === dayText(iso) ? dayText(iso) : dayLabel(iso) + ', ' + dayText(iso));
+    var near = { 0: 'Today', 1: 'Tomorrow', '-1': 'Yesterday' }[daysFromToday(iso)];
+    mark.appendChild(text('span', 'dnum', String(d.getDate())));
+    mark.appendChild(text('span', 'dmon', MON[d.getMonth()]
+        + (d.getFullYear() === new Date().getFullYear() ? '' : ' ' + d.getFullYear())));
+    mark.appendChild(text('span', 'dwk' + (near ? ' is-near' : ''), near || DAY[d.getDay()].slice(0, 3)));
+    for (var i = 0; i < mark.children.length; i++) { mark.children[i].setAttribute('aria-hidden', 'true'); }
+    return mark;
+  }
+
+  /** Today, laid across the list. Everything under it has yet to arrive. */
+  function nowMark() {
+    var tape = text('div', 'nowmark');
+    var d = new Date();
+    tape.appendChild(text('strong', null, 'Today'));
+    tape.appendChild(text('span', null, DAY[d.getDay()] + ' ' + d.getDate() + ' ' + MONTH[d.getMonth()]));
+    tape.appendChild(text('span', 'ahead', 'Still to come below'));
+    if (MOTION && !tapeLaid) {
+      tapeLaid = true;
+      tape.classList.add('is-laying');
+    }
+    return tape;
+  }
+
+  var tapeLaid = false;
+
+  /** Today in the middle of the screen, jumped to rather than scrolled: this is where the page sits. */
+  /**
+   * Today near the top of the screen, just under the bar, with a strip of the faded finished orders
+   * above it so the past is visibly there to scroll back into.
+   *
+   * <p>When little is still to come there is not enough page below today to scroll that far, so the
+   * list is given just enough room at its end to let today rise into place.
+   */
+  var PAST_SHOWN = 120;
+  function todayTop(mark) {
+    var host = document.getElementById('timeline');
+    host.style.paddingBottom = '';
+    var bar = document.getElementById('topbar').getBoundingClientRect().height;
+    var markAt = mark.getBoundingClientRect().top + window.scrollY;
+    var target = Math.max(0, markAt - bar - PAST_SHOWN);
+    var short = target + window.innerHeight - document.documentElement.scrollHeight;
+    if (short > 0) { host.style.paddingBottom = short + 'px'; }
+    return target;
+  }
+
+  function restAtToday() {
+    var mark = document.querySelector('.nowmark');
+    if (!mark) { return; }
+    window.scrollTo({ top: todayTop(mark), behavior: 'instant' });
+  }
+
+  function scrollToNow() {
+    var mark = document.querySelector('.nowmark');
+    if (mark) { window.scrollTo({ top: todayTop(mark), behavior: 'smooth' }); }
+  }
+
+  function matches(order, needle) {
+    if (!needle) { return true; }
+    var hay = [order.shop, order.title, order.orderNumber, order.stageLabel]
+      .concat(order.parcels.map(function (p) { return p.number + ' ' + p.carrier; }))
+      .join(' ').toLowerCase();
+    return hay.indexOf(needle) >= 0;
+  }
+
+  /** Keeps whatever the reader is looking at still, when rows appear or vanish above it. */
+  function keepingPlace(change) {
+    var fromBottom = document.body.scrollHeight - window.scrollY;
+    change();
+    window.scrollTo(0, Math.max(0, document.body.scrollHeight - fromBottom));
+  }
+
+  function render(anchor) {
+    var host = document.getElementById('timeline');
+    var needle = document.getElementById('filter').value.trim().toLowerCase();
+    var orders = all.filter(function (o) {
+      return matches(o, needle);
+    });
+
+    document.getElementById('filtercount').textContent =
+      needle ? orders.length + ' of ' + all.length : '';
+    document.getElementById('filter').parentNode.classList.toggle('is-counting', !!needle);
+
+    host.textContent = '';
+    if (!all.length) {
+      host.className = 'empty';
+      host.textContent = 'Nothing has arrived yet. Orders appear here as their emails come in.';
+      return;
+    }
+    if (!orders.length) {
+      host.className = 'empty allclear';
+      host.textContent = '';
+      if (needle) {
+        host.appendChild(text('p', null, 'Nothing here matches that.'));
+      } else {
+        // Reaching the end of the list is the good outcome, and it should read like one. The button
+        // that brings the rest back is named rather than pointed at, because it is a few
+        // centimetres above this line and hunting for it is the only thing left to get wrong.
+        host.appendChild(text('p', 'allclear-line', 'Nothing is on its way.'));
+        host.appendChild(text('p', null, all.length
+            ? 'All ' + all.length + ' orders on record are done with.'
+            : 'Orders will appear here as their emails come in.'));
+      }
+      return;
+    }
+    host.className = 'timeline';
+
+    var lastDay = null;
+    var slips = null;
+    var nowMarkPlaced = false;
+
+    // A day is its date on the rail and a column of that day's slips beside it.
+    function startDay(mark, className) {
+      var day = text('section', 'day' + (className ? ' ' + className : ''));
+      day.appendChild(mark);
+      slips = text('div', 'slips');
+      day.appendChild(slips);
+      host.appendChild(day);
+      return day;
+    }
+
+    // Orders nobody gave a date for sit apart from the timeline, under a heading of their own:
+    // dating them by their last email would put 2025 day marks underneath next week's, which reads
+    // as a bug rather than as a group. The finished ones head the whole list, ahead of the oldest
+    // dated orders; the ones still to arrive go at the very bottom, after the last dated order.
+    function addUndated(group) {
+      if (!group.length) { return; }
+      var heading = text('div', 'daymark is-undated', 'No date given');
+      heading.setAttribute('role', 'heading');
+      heading.setAttribute('aria-level', '2');
+      startDay(heading, 'is-undated');
+      group.forEach(function (order) { slips.appendChild(entryOf(order)); });
+    }
+    function placeNow() {
+      nowMarkPlaced = true;
+      host.appendChild(nowMark());
+      lastDay = null;
+    }
+
+    addUndated(orders.filter(function (o) { return o.dateAssumed && isDone(o); }));
+    orders.forEach(function (order) {
+      if (order.dateAssumed) { return; }
+      // Everything below this line is still to come. The list is already in date order, so the
+      // marker belongs at the first order that is not in the past.
+      if (!nowMarkPlaced && order.sortDate >= todayIso) { placeNow(); }
+      if (order.sortDate !== lastDay) {
+        lastDay = order.sortDate;
+        startDay(dayMark(order.sortDate), order.sortDate < todayIso ? 'is-past' : '');
+      }
+      slips.appendChild(entryOf(order));
+    });
+    // Everything shown is in the past: today still belongs at the end, where the next thing would go.
+    if (!nowMarkPlaced) { placeNow(); }
+    addUndated(orders.filter(function (o) { return o.dateAssumed && !isDone(o); }));
+
+    // The page always starts at today, with what has just happened above it and what is still to
+    // come below, however many completed or undated orders sit on either side.
+    if (anchor !== 'keep') { restAtToday(); }
+  }
+
+  // ---- one order in full ----------------------------------------------------------------------
+
+  /** A section of a page under a plain heading. */
+  function card(headingText) {
+    var section = text('section', 'section');
+    if (headingText) { section.appendChild(text('h2', null, headingText)); }
+    return section;
+  }
+
+  function fact(key, value) {
+    var wrapper = text('div', 'fact');
+    wrapper.appendChild(text('span', 'k', key));
+    wrapper.appendChild(text('span', 'v', value));
+    return wrapper;
+  }
+
+  function expectedText(order) {
+    if (!order.expectedFrom) { return 'Not stated'; }
+    if (order.expectedTo && order.expectedTo !== order.expectedFrom) {
+      return dayText(order.expectedFrom) + ' – ' + dayText(order.expectedTo);
+    }
+    return dayText(order.expectedFrom) + (order.carrierWindow && !order.finished ? ', ' + order.carrierWindow : '');
+  }
+
+  /** What PostNL's own tracking said last, and when it was asked. */
+  function carrierText(order) {
+    var asked = new Date(order.carrierCheckedAt);
+    var clock = asked.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    if (asked.toDateString() !== new Date().toDateString()) {
+      clock = asked.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + ', ' + clock;
+    }
+    return (order.carrierNote || 'No news') + ' (checked ' + clock + ')';
+  }
+
+  function markControl(order) {
+    var wrapper = text('div', 'mark-row');
+    var choice = markChoice(order);
+    var button = text('button', 'mark' + (choice.undo ? ' is-undo' : ''), choice.long);
+    button.type = 'button';
+    var note = text('span', 'mark-note', choice.note);
+    button.addEventListener('click', function () {
+      button.disabled = true;
+      sendMark(order, choice.what, choice.on, false)
+        .then(function (updated) {
+          // The wording and the colour of the heading both follow from this, so the whole view is
+          // drawn again from the answer the server gave — and the timeline behind it is told too.
+          remember(updated);
+          renderDetail(updated, emailsOf(updated.id));
+        })
+        .catch(function () {
+          button.disabled = false;
+          note.textContent = 'That did not save. Try again?';
+        });
+    });
+    wrapper.appendChild(button);
+    wrapper.appendChild(note);
+    return wrapper;
+  }
+
+  /** Setting aside mail that looks like an order and is not one: it leaves the list and the numbers. */
+  function dismissControl(order) {
+    var wrapper = text('div', 'mark-row');
+    var button = text('button', 'mark', 'Not a real order');
+    button.type = 'button';
+    var note = text('span', 'mark-note', '');
+    button.addEventListener('click', function () {
+      button.disabled = true;
+      sendMark(order, 'dismissed', true, false)
+        .then(function (updated) {
+          remember(updated);
+          renderDetail(updated, emailsOf(updated.id));
+        })
+        .catch(function () {
+          button.disabled = false;
+          note.textContent = 'That did not save. Try again?';
+        });
+    });
+    wrapper.appendChild(button);
+    wrapper.appendChild(note);
+    return wrapper;
+  }
+
+  /** A link to another order, which opens in the same way a row does rather than reloading. */
+  function orderLink(link) {
+    var a = text('a', 'orderlink', link.name);
+    a.href = '/orders/' + link.id;
+    a.addEventListener('click', function (event) {
+      if (!ownClick(event)) { return; }
+      event.preventDefault();
+      openOrder(link.id, true);
+    });
+    return a;
+  }
+
+  /** A sentence with a link to another order dropped into the middle of it. */
+  function sentenceAbout(before, link, after) {
+    var p = text('p', null, before);
+    p.appendChild(orderLink(link));
+    p.appendChild(document.createTextNode(after));
+    return p;
+  }
+
+  /**
+   * Saying that an order never came and another one was sent out in its place.
+   *
+   * <p>Two orders, not one: they have their own numbers, their own confirmations and their own
+   * delivery dates, and welding them together would be undone the next time every order is rebuilt
+   * from its emails. So this only records which one stood in for which — and then the first drops
+   * off the list of outstanding orders, because there is nothing left to wait for on it.
+   *
+   * <p>The shop is no help in choosing. Its replacement confirmation names the new order number and
+   * nowhere mentions the old one, so the list below is a short list of possibilities with the
+   * likeliest at the top, and the reader — who is the one who telephoned — picks from it.
+   */
+  function reorderControl(order) {
+    var wrapper = text('div', 'mark-row');
+    var button = text('button', 'mark', 'It was re-ordered');
+    button.type = 'button';
+    var panel = text('div', 'picker');
+    panel.hidden = true;
+
+    button.addEventListener('click', function () {
+      if (!panel.hidden) {
+        panel.hidden = true;
+        button.textContent = 'It was re-ordered';
+        // Backing out of the question is not an affirmative act and should not go green for one.
+        button.classList.remove('is-undo');
+        return;
+      }
+      panel.hidden = false;
+      button.textContent = 'Never mind';
+      button.classList.add('is-undo');
+      if (panel.dataset.loaded) { return; }
+      panel.appendChild(text('p', 'mark-note', 'Looking for it…'));
+      fetch('/api/orders/' + order.id + '/replacements', { credentials: 'same-origin' })
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+        .then(function (candidates) {
+          panel.dataset.loaded = '1';
+          panel.textContent = '';
+          if (!candidates.length) {
+            panel.appendChild(text('p', 'mark-note', 'There is no later order from this shop to point '
+                + 'at. The replacement has to be in here before it can be linked — it arrives with '
+                + 'the shop’s confirmation of it.'));
+            return;
+          }
+          panel.appendChild(text('p', 'mark-note', 'Which order took its place?'));
+          candidates.forEach(function (c) { panel.appendChild(candidateRow(order, c)); });
+        })
+        .catch(function () {
+          panel.textContent = '';
+          panel.appendChild(text('p', 'mark-note', 'That list could not be loaded.'));
+        });
+    });
+
+    wrapper.appendChild(button);
+    wrapper.appendChild(panel);
+    return wrapper;
+  }
+
+  function candidateRow(order, candidate) {
+    var row = text('div', 'pick' + (candidate.suggested ? ' is-suggested' : ''));
+    var words = text('div', 'pickwords');
+    var line = text('div', 'pickline');
+    line.appendChild(text('span', 'picknum', candidate.orderNumber || 'no order number'));
+    if (candidate.total) { line.appendChild(text('span', 'amount', candidate.total)); }
+    if (candidate.sortDate) { line.appendChild(text('span', 'mark-note', dayText(candidate.sortDate))); }
+    words.appendChild(line);
+    if (candidate.title) { words.appendChild(text('div', 'meta', candidate.title)); }
+    if (candidate.why) { words.appendChild(text('div', 'pickwhy', candidate.why)); }
+    row.appendChild(words);
+
+    var choose = text('button', 'mark', 'This one');
+    choose.type = 'button';
+    choose.addEventListener('click', function () {
+      choose.disabled = true;
+      sendLink(order, candidate.id)
+        .then(function (updated) {
+          remember(updated);
+          renderDetail(updated, emailsOf(updated.id));
+        })
+        .catch(function () {
+          choose.disabled = false;
+          choose.textContent = 'did not save';
+          choose.classList.add('is-bad');
+        });
+    });
+    row.appendChild(choose);
+    return row;
+  }
+
+  /**
+   * Draws an order in full. The emails are passed separately because the timeline already knows
+   * everything else about it: the page can be complete except for its history the instant a row is
+   * clicked, and the history drops in when it arrives.
+   */
+  function renderDetail(order, emails) {
+    var host = document.getElementById('detailbody');
+    host.textContent = '';
+    host.className = '';
+
+    document.title = (order.shop || 'Order') + ' – Orders';
+    document.getElementById('shop').textContent = order.shop || 'Unknown shop';
+    var stageLine = document.getElementById('stage');
+    // The heading carries the state, in the same word and colour as the order's row in the list.
+    var state = statusOf(order);
+    stageLine.textContent = state.label;
+    stageLine.className = 'status ' + state.mood;
+
+    var summary = text('section', 'sheet');
+    // Beside the name rather than above it: what was bought is the thing being looked at, and the
+    // numbers underneath are what the reader came to check about it.
+    var item = text('div', 'item');
+    var picture = thumbOf(order, 'shot');
+    if (picture) { item.appendChild(picture); }
+    item.appendChild(text('h2', 'title', order.title || 'No item names in the emails'));
+    summary.appendChild(item);
+    var facts = text('div', 'facts');
+    facts.appendChild(fact('Expected', expectedText(order)));
+    if (order.carrierCheckedAt) { facts.appendChild(fact('PostNL', carrierText(order))); }
+    if (order.orderNumber) { facts.appendChild(fact('Order number', order.orderNumber)); }
+    if (order.total) { facts.appendChild(fact('Total', order.total)); }
+    facts.appendChild(fact('Emails', String(order.emailCount)));
+    summary.appendChild(facts);
+    if (order.replacedBy) {
+      summary.appendChild(sentenceAbout('Replaced by ', order.replacedBy, '.'));
+    }
+    order.replaces.forEach(function (earlier) {
+      summary.appendChild(sentenceAbout('Replaces ', earlier, ', which never arrived.'));
+    });
+    // Always offered, and on a shop-confirmed order it is the more useful of the two directions:
+    // see markChoice for which way round it goes.
+    summary.appendChild(markControl(order));
+    // The two rarer answers share one row, and only on an order that is still outstanding: a
+    // delivered order was real, and a finished one has nothing left to wait for.
+    var rare = text('div', 'mark-row is-rare');
+    if (!order.dismissed && !order.finished) {
+      rare.appendChild(dismissControl(order));
+    }
+    if (!order.replacedBy && !order.finished) {
+      // Only here rather than on the timeline row: telephoning a shop about a parcel that never
+      // came is a rare thing to have done, and the row has room for the answer but not the question.
+      rare.appendChild(reorderControl(order));
+    }
+    if (rare.childNodes.length) { summary.appendChild(rare); }
+    host.appendChild(summary);
+
+    if (order.parcels.length) {
+      var parcels = card(order.parcels.length === 1 ? 'The parcel' : 'The parcels');
+      order.parcels.forEach(function (parcel) {
+        var row = text('div', 'parcel');
+        row.appendChild(text('span', 'carrier', parcel.carrier || 'Carrier unknown'));
+        row.appendChild(text('span', 'num', parcel.number));
+        if (parcel.url) {
+          var link = text('a', null, 'Track it');
+          link.href = parcel.url;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.setAttribute('aria-label', 'Track parcel ' + parcel.number + ' (opens a new tab)');
+          row.appendChild(link);
+        }
+        parcels.appendChild(row);
+      });
+      host.appendChild(parcels);
+    }
+
+    var story = card(order.emailCount === 1 ? 'The email' : 'The emails, oldest first');
+    var list = text('ol', 'mails');
+    if (emails) {
+      emails.forEach(function (email) {
+        var row = text('li', 'mail' + (email.became ? ' ' + (moodOfStage(email.became) || 'is-placed') : ''));
+        row.appendChild(text('div', 'subj', email.subject || '(no subject)'));
+        row.appendChild(text('div', 'when', (email.sender || 'Unknown sender') + ', '
+            + (email.sentAt ? whenText(email.sentAt) : 'date unknown')));
+        row.appendChild(changesOf(email));
+        list.appendChild(row);
+      });
+    } else {
+      // Still on its way from the server. Standing in a row of the right shape for each email keeps
+      // the page from jumping about when they land.
+      for (var i = 0; i < Math.max(1, order.emailCount); i++) {
+        var blank = text('li', 'mail is-waiting');
+        blank.appendChild(text('div', 'skel skel-subj'));
+        blank.appendChild(text('div', 'skel skel-when'));
+        list.appendChild(blank);
+      }
+    }
+    story.appendChild(list);
+    host.appendChild(story);
+  }
+
+  /** What one email changed about its order: the state, the delivery date, new parcel numbers. */
+  function changesOf(email) {
+    var line = text('div', 'changes');
+    if (email.became) {
+      line.appendChild(text('span', 'status ' + moodOfStage(email.became), email.becameLabel));
+    }
+    // A delivery email's date is the day it came, which the state beside it already says.
+    if (email.expectedFrom && email.became !== 'DELIVERED' && email.stage !== 'DELIVERED') {
+      var due = email.expectedTo && email.expectedTo !== email.expectedFrom
+          ? shortDay(email.expectedFrom) + ' – ' + shortDay(email.expectedTo)
+          : shortDay(email.expectedFrom);
+      line.appendChild(text('span', 'change', 'Expected ' + due));
+    }
+    email.newParcels.forEach(function (number) {
+      line.appendChild(text('span', 'change', 'Parcel ' + number));
+    });
+    if (!line.childNodes.length) {
+      line.appendChild(text('span', 'change is-none', 'No change'));
+    }
+    return line;
+  }
+
+  function shortDay(iso) {
+    var d = parseDay(iso);
+    return DAY[d.getDay()] + ' ' + d.getDate() + ' ' + MONTH[d.getMonth()];
+  }
+
+  // ---- moving between the two -----------------------------------------------------------------
+
+  var MOTION = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      ? null : true;
+  var listView = document.getElementById('listview');
+  var detailView = document.getElementById('detailview');
+  var openId = null;          // the order being shown, or null on the timeline
+  var listY = 0;              // where the timeline was left
+  var listFromBottom = 0;     // ...and how far that was from its end, which survives rows folding away
+  var listDirty = false;      // something changed underneath while an order was open
+  var cameFromList = false;   // whether the timeline is a step back in the browser's own history
+  var listAtRest = true;      // the timeline has never been left, so it wants its resting place
+  var emailCache = {};        // the mail belonging to each order, once fetched
+
+  function emailsOf(id) {
+    return emailCache[id] || null;
+  }
+
+  /** Slides a view in. Only the incoming one moves: the sticky bar must not sit on a moving layer. */
+  function slide(elements, direction) {
+    if (!MOTION) { return; }
+    elements.forEach(function (el) {
+      if (!el) { return; }
+      var name = direction === 'forward' ? 'slide-from-right' : 'slide-from-left';
+      el.classList.remove('slide-from-right', 'slide-from-left');
+      // Reading the layout in between is what makes a second click restart the animation rather
+      // than be ignored as a class that is already there.
+      void el.offsetWidth;
+      el.classList.add(name);
+      el.addEventListener('animationend', function done() {
+        el.classList.remove(name);
+        el.removeEventListener('animationend', done);
+      });
+    });
+  }
+
+  function rowFor(id) {
+    return all.filter(function (o) { return o.id === id; })[0] || null;
+  }
+
+  /** Keeps the timeline's copy of an order in step with an answer from the server. */
+  function remember(updated) {
+    var at = all.findIndex(function (o) { return o.id === updated.id; });
+    if (at >= 0) {
+      all[at] = updated;
+      listDirty = true;
+    }
+  }
+
+  function openOrder(id, push) {
+    var known = rowFor(id);
+    if (openId === null && !listView.hidden) {
+      listY = window.scrollY;
+      listFromBottom = document.body.scrollHeight - window.scrollY;
+      listAtRest = false;
+    }
+    openId = id;
+
+    if (known) {
+      renderDetail(known, emailsOf(id));
+    } else {
+      // Straight to an order's own address, before the timeline has been read.
+      document.getElementById('detailbody').className = 'empty';
+      document.getElementById('detailbody').textContent = 'Looking it up…';
+    }
+
+    listView.hidden = true;
+    detailView.hidden = false;
+    window.scrollTo(0, 0);
+    slide([detailView], 'forward');
+
+    if (push) {
+      history.pushState({ order: id }, '', '/orders/' + id);
+      cameFromList = true;
+    }
+
+    // Always ask, even with a copy in hand: the emails may have moved on since the list was read.
+    fetch('/api/orders/' + encodeURIComponent(id), { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      .then(function (detail) {
+        if (openId !== id) { return; }   // the reader has moved on already
+        emailCache[id] = detail.emails;
+        remember(detail.order);
+        renderDetail(detail.order, detail.emails);
+      })
+      .catch(function (status) {
+        if (openId !== id || rowFor(id)) { return; }
+        var host = document.getElementById('detailbody');
+        host.className = 'empty';
+        host.textContent = status === 404 ? 'There is no such order.' : 'This order could not be loaded.';
+      });
+  }
+
+  function showList(push) {
+    openId = null;
+    cameFromList = false;
+    detailView.hidden = true;
+    listView.hidden = false;
+    document.title = 'Orders';
+
+    var changed = listDirty;
+    if (changed) {
+      listDirty = false;
+      render('keep');
+    }
+
+    if (listAtRest) {
+      // The timeline was never actually left, so there is nowhere to go back to: today is where it
+      // belongs. This is the way in for a reader who opened an order's own address, whose height
+      // could not be measured while it sat hidden behind that order.
+      listAtRest = false;
+      restAtToday();
+    } else if (changed) {
+      // A row folding away shortens the page, so the distance to the end is the honest thing to keep.
+      window.scrollTo(0, Math.max(0, document.body.scrollHeight - listFromBottom));
+    } else {
+      window.scrollTo(0, listY);
+    }
+    slide([document.getElementById('timeline')], 'back');
+    if (push) { history.pushState({ order: null }, '', '/'); }
+  }
+
+  /** A plain left-click on an in-page link; anything else is the browser's to handle as usual. */
+  function ownClick(event) {
+    return !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && event.button === 0;
+  }
+
+  function goBackToList(event) {
+    if (!ownClick(event)) { return; }
+    event.preventDefault();
+    // Stepping back rather than adding to the history, so that leaving an order does not then take
+    // two presses of the browser's own back button. Only when the timeline is genuinely behind this
+    // one, though: a reader who arrived straight at an order's address would otherwise be sent off
+    // the site altogether.
+    if (cameFromList) { history.back(); } else { showList(true); }
+  }
+
+  document.getElementById('backlink').addEventListener('click', goBackToList);
+
+  window.addEventListener('popstate', function (event) {
+    var state = event.state || {};
+    if (state.order) { openOrder(state.order, false); }
+    else { showList(false); }
+  });
+
+  // ---- saying an order arrived -------------------------------------------------------------
+
+  var csrf = null;
+
+  function csrfToken(force) {
+    if (csrf && !force) { return Promise.resolve(csrf); }
+    return fetch('/api/csrf', { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      .then(function (token) { csrf = token; return token; });
+  }
+
+  /**
+   * Records what the reader says about whether an order arrived.
+   *
+   * <p>`what` is 'delivered' when they are ticking one off, 'not-delivered' when they are saying a
+   * parcel a shop called delivered never turned up. `on` is false to withdraw either.
+   */
+  function sendMark(order, what, on, retry) {
+    return csrfToken(retry).then(function (token) {
+      var headers = {};
+      headers[token.headerName] = token.token;
+      return fetch('/api/orders/' + order.id + '/' + what, {
+        method: on ? 'POST' : 'DELETE',
+        credentials: 'same-origin',
+        headers: headers
+      });
+    }).then(function (response) {
+      // A session that was renewed in another tab leaves a stale token behind. Worth one quiet
+      // second attempt with a fresh one before troubling anybody about it.
+      if (response.status === 403 && !retry) { return sendMark(order, what, on, true); }
+      return response.ok ? response.json() : Promise.reject(response.status);
+    });
+  }
+
+  /**
+   * Records that another order was sent out to stand in for this one.
+   *
+   * <p>Kept apart from {@link sendMark} because it names a second order in the address, which that
+   * one has no way to say.
+   */
+  function sendLink(order, otherId, retry) {
+    return csrfToken(retry).then(function (token) {
+      var headers = {};
+      headers[token.headerName] = token.token;
+      return fetch('/api/orders/' + order.id + '/replaced-by/' + otherId, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: headers
+      });
+    }).then(function (response) {
+      if (response.status === 403 && !retry) { return sendLink(order, otherId, true); }
+      return response.ok ? response.json() : Promise.reject(response.status);
+    });
+  }
+
+  function setMarked(order, choice, button) {
+    button.disabled = true;
+    sendMark(order, choice.what, choice.on, false)
+      .then(function (updated) {
+        remember(updated);
+        listDirty = false;
+        keepingPlace(function () { render('keep'); });
+      })
+      .catch(function () {
+        button.disabled = false;
+        button.textContent = 'did not save';
+        button.classList.add('is-bad');
+      });
+  }
+
+  // ---- loading ------------------------------------------------------------------------------
+
+  /** The order asked for by the address bar, if the page was opened on one. */
+  function idInAddress() {
+    var match = window.location.pathname.match(/^\/orders\/(\d+)$/);
+    if (match) { return +match[1]; }
+    var legacy = new URLSearchParams(window.location.search).get('id');
+    return legacy ? +legacy : null;
+  }
+
+  // The dates on the rail stick just under the bar, whose height changes with the width of the
+  // screen and with whether its second row is showing yet.
+  var topbar = document.getElementById('topbar');
+  function measureBar() {
+    document.documentElement.style.setProperty('--bar-h', topbar.offsetHeight + 'px');
+  }
+  if (window.ResizeObserver) { new ResizeObserver(measureBar).observe(topbar); }
+  measureBar();
+
+  if ('scrollRestoration' in history) {
+    // The page decides where it rests — at the end of the timeline, or the top of an order.
+    history.scrollRestoration = 'manual';
+  }
+
+  var wanted = idInAddress();
+  history.replaceState(
+      { order: wanted },
+      '',
+      wanted ? '/orders/' + wanted : window.location.pathname);
+  if (wanted) {
+    openOrder(wanted, false);
+  }
+
+  fetch('/api/orders', { credentials: 'same-origin' })
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+    .then(function (orders) {
+      all = orders;
+      document.getElementById('bar').hidden = false;
+      render('bottom');
+      if (openId !== null) {
+        // Drawn underneath something that is already open. The timeline's height means nothing
+        // while it sits hidden, so it is left wanting its resting place rather than a measurement.
+        listAtRest = true;
+        window.scrollTo(0, 0);
+      }
+    })
+    .catch(function () {
+      var host = document.getElementById('timeline');
+      host.className = 'empty';
+      host.textContent = 'The list of orders could not be loaded.';
+    });
+
+  document.getElementById('filter').addEventListener('input', function () { render('bottom'); });
+  document.getElementById('todaybtn').addEventListener('click', scrollToNow);
+})();
+</script>
+</body>
+</html>
